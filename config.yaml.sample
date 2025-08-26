@@ -1,0 +1,37 @@
+app:
+  input_dir: "./data/inbox"
+  archive_dir: "./data/archive"
+  reject_dir: "./data/rejects"
+  log_dir: "./logs"
+  default_sheet: "Sheet1"
+
+db:
+  # Main database URL
+  url: "postgresql+psycopg2://user:pass@localhost:5432/appdb"
+  # Existing database URL (optional, defaults to main db)
+  existing_db_url: null
+  # Schema name for cost tables
+  schema_name: "cost"
+
+integration:
+  existing_projects_table: "existing.projects"
+  existing_vendors_table: "existing.vendors"
+  enable_fuzzy_vendor_match: true
+  fuzzy_threshold: 90
+
+rules:
+  account_code_regex: "^[A-Z]\\.[0-9]+(\\.[0-9]+)*$"
+  subtotal_keywords:
+    - "合計"
+    - "小計"
+    - "累計"
+    - "売上合計"
+    - "kW単価"
+  vendor_normalize_patterns:
+    - ["（株）", ""]
+    - ["(株)", ""]
+    - ["株式会社", ""]
+    - ["有限会社", ""]
+    - ["(有)", ""]
+    - ["　", " "]       # Full-width space to half-width
+    - ["\u3000", " "]   # Unicode full-width space
