@@ -1,4 +1,5 @@
 import React from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Item, UnitBasis } from '../types';
 
 const formatJPY = (v?: number | null) => {
@@ -45,10 +46,20 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
   const [searchQuery, setSearchQuery] = React.useState<string>('');
   // Confirmed amount lock (契約金額として固定)
   const [lockConfirmed, setLockConfirmed] = React.useState<boolean>(true);
+  // Folding state: collapsed aggregate codes
+  const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
 
   const denomKw = unitBasis === 'dc' ? dcKw : unitBasis === 'ac' ? acKw : customKw;
 
   const items = itemsProp ?? itemsState;
+  // Special target row to host unified summary (収支合計) inside a U row
+  const specialTargetCode = React.useMemo(() => {
+    // Prefer explicit B.24.7.u1 when present
+    if (items.some(i => i.code === 'B.24.7.u1')) return 'B.24.7.u1';
+    // Fallback: first U-row under B.*
+    const cand = items.find(i => /^B(?:\.[^\.]+)+\.u\d+$/i.test(i.code));
+    return cand ? cand.code : null;
+  }, [items]);
 
   // Update available top keys and ensure activeTop is valid
   const topKeys = React.useMemo(() => {
@@ -63,12 +74,7 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
     return hay.includes('収支') || (hay.includes('仕入') && hay.includes('合計'));
   }, []);
 
-  const costSummaryLabel = React.useCallback((row: Item) => {
-    const hay = `${row.title || ''} ${row.vendor || ''} ${row.note || ''}`;
-    if (hay.includes('収支')) return '収支';
-    if (hay.includes('仕入')) return '仕入合計';
-    return '合計';
-  }, []);
+  // costSummaryLabel was used in prior UI; current layout omits explicit labels
   React.useEffect(() => {
     if (!topKeys.length) return;
     if (!topKeys.includes(activeTop)) {
@@ -85,6 +91,49 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
     }
     return { hasChildrenMap };
   }, [items]);
+
+  // Compute aggregate candidates (has non-U immediate children or marked aggregate)
+  const computeAggregateCodes = React.useCallback(() => {
+    const isImmediateChildOf = (parent: string, child: string) =>
+      child.startsWith(parent + '.') && child.split('.').length === parent.split('.').length + 1;
+    const isUSegment = (seg: string) => /^u\d*$/i.test(seg);
+    const res = new Set<string>();
+    for (const r of items) {
+      const hasNonUImmediateChildren = items.some(o => {
+        if (o.code === r.code) return false;
+        if (!isImmediateChildOf(r.code, o.code)) return false;
+        const last = o.code.split('.').pop()!;
+        return !isUSegment(last);
+      });
+      if (r.is_aggregate_row || hasNonUImmediateChildren) res.add(r.code);
+    }
+    return res;
+  }, [items]);
+
+  // Initialize collapsed state to "all collapsed" on first mount or when external items provided
+  const didInitCollapseRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!didInitCollapseRef.current) {
+      setCollapsed(computeAggregateCodes());
+      didInitCollapseRef.current = true;
+    }
+  }, [computeAggregateCodes]);
+  React.useEffect(() => {
+    if (itemsProp) {
+      setCollapsed(computeAggregateCodes());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsProp]);
+
+  const toggleCollapse = (code: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code); else next.add(code);
+      return next;
+    });
+  };
+  const expandAll = () => setCollapsed(new Set());
+  const collapseAll = () => setCollapsed(computeAggregateCodes());
 
   const isRowCompletelyEmpty = (row: Item) => {
     // Consider numeric 0 as data (not empty). Null/undefined/'' are empty.
@@ -139,13 +188,26 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
     }
 
     if (!hideEmptyRows) return base;
-    return base.filter(row => {
+    let filtered = base.filter(row => {
       if (editingId && row.id === editingId) return true; // keep visible while editing
       const isAggregate = row.is_aggregate_row || !!hasChildrenMap.get(row.code);
       if (isAggregate) return true; // keep structural rows
+      if (specialTargetCode && row.code === specialTargetCode) return true; // keep special summary host
       return !isRowCompletelyEmpty(row);
     });
-  }, [items, hideEmptyRows, editingId, hasChildrenMap, activeTop, isCostSummaryRow, showUnpaidOnly, showIssuesOnly, searchQuery]);
+    // Apply folding: hide rows whose ancestor is collapsed
+    const hasCollapsedAncestor = (code: string) => {
+      const parts = code.split('.');
+      let prefix = parts[0];
+      for (let i = 1; i < parts.length; i++) {
+        if (collapsed.has(prefix)) return true;
+        prefix += '.' + parts[i];
+      }
+      return false;
+    };
+    filtered = filtered.filter(row => !hasCollapsedAncestor(row.code));
+    return filtered;
+  }, [items, hideEmptyRows, editingId, hasChildrenMap, activeTop, isCostSummaryRow, showUnpaidOnly, showIssuesOnly, searchQuery, collapsed, specialTargetCode]);
 
   const setItems = (updater: (prev: Item[]) => Item[]) => {
     const next = updater(items);
@@ -154,27 +216,54 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
   };
 
   const totals = React.useMemo(() => {
-    // Sum only leaf/detail rows to avoid double counting aggregates
-    const isLeaf = (code: string) => !hasChildrenMap.get(code);
-    const sumByPrefix = (prefix: string, key: keyof Item) =>
-      items
-  .filter(it => it.code.startsWith(prefix + '.') && isLeaf(it.code))
-  .filter(it => !isCostSummaryRow(it)) // exclude labeled summary rows like '仕入合計'
+    // Deepest-populated aggregation (avoid double count), consistent with Overview
+    const sumForPrefix = (prefix: string, key: keyof Item) => {
+      const pool = items.filter(it => it.code === prefix || it.code.startsWith(prefix + '.'));
+      const hasDeeperWithValue = (base: string) =>
+        pool.some(d => d.code.startsWith(base + '.') && (d[key] as number | null) != null);
+      return pool
+        .filter(it => !isCostSummaryRow(it))
+        .filter(it => (it[key] as number | null) != null)
+        .filter(it => !hasDeeperWithValue(it.code))
         .map(it => (it[key] as number | null) || 0)
         .reduce((a, b) => a + (b || 0), 0);
+    };
     return {
       A: {
-        budget: sumByPrefix('A', 'budget_amount'),
-        actual: sumByPrefix('A', 'actual_planned_amount'),
-        confirmed: sumByPrefix('A', 'confirmed_amount'),
+        budget: sumForPrefix('A', 'budget_amount'),
+        actual: sumForPrefix('A', 'actual_planned_amount'),
+        confirmed: sumForPrefix('A', 'confirmed_amount'),
       },
       B: {
-        budget: sumByPrefix('B', 'budget_amount'),
-        actual: sumByPrefix('B', 'actual_planned_amount'),
-        confirmed: sumByPrefix('B', 'confirmed_amount'),
+        budget: sumForPrefix('B', 'budget_amount'),
+        actual: sumForPrefix('B', 'actual_planned_amount'),
+        confirmed: sumForPrefix('B', 'confirmed_amount'),
       }
     };
-  }, [items, hasChildrenMap, isCostSummaryRow]);
+  }, [items, isCostSummaryRow]);
+
+  // Special rows: use labeled 仕入合計 and 収支 if present
+  const specialRows = React.useMemo(() => {
+    const mkHay = (r: Item) => `${r.title || ''} ${r.vendor || ''} ${r.note || ''}`;
+    const costSum = items.find(r => mkHay(r).includes('仕入') && mkHay(r).includes('合計')) || null;
+    const balance = items.find(r => mkHay(r).includes('収支')) || null;
+    return { costSum, balance };
+  }, [items]);
+
+  const summary = React.useMemo(() => {
+    const rev = { budget: totals.A.budget || 0, actual: totals.A.actual || 0, confirmed: totals.A.confirmed || 0 };
+    const cost = {
+      budget: (specialRows.costSum?.budget_amount ?? totals.B.budget) || 0,
+      actual: (specialRows.costSum?.actual_planned_amount ?? totals.B.actual) || 0,
+      confirmed: (specialRows.costSum?.confirmed_amount ?? totals.B.confirmed) || 0,
+    };
+    const balance = {
+      budget: (specialRows.balance?.budget_amount ?? (rev.budget - cost.budget)) || 0,
+      actual: (specialRows.balance?.actual_planned_amount ?? (rev.actual - cost.actual)) || 0,
+      confirmed: (specialRows.balance?.confirmed_amount ?? (rev.confirmed - cost.confirmed)) || 0,
+    };
+    return { rev, cost, balance };
+  }, [totals, specialRows]);
 
   const onChangeCell = (id: number, field: keyof Item, value: any) => {
     setItems(prev => prev.map(it => (it.id === id ? { ...it, [field]: value } : it)));
@@ -253,6 +342,12 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
             ))}
           </div>
 
+          {/* Fold controls */}
+          <div className="ml-2 flex items-center gap-2">
+            <button onClick={expandAll} className="inline-flex items-center px-2 py-1 rounded border text-xs bg-white hover:bg-gray-50">全て展開</button>
+            <button onClick={collapseAll} className="inline-flex items-center px-2 py-1 rounded border text-xs bg-white hover:bg-gray-50">全て折りたたみ</button>
+          </div>
+
           <button
             onClick={() => addRow(`${activeTop}.1`)}
             className="ml-3 inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700"
@@ -266,21 +361,23 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
         </div>
       </div>
 
-      {/* Totals for active section */}
-      <div className="grid grid-cols-1 gap-4 mb-4">
-        {activeTop === 'A' && (
-          <div className="p-3 rounded bg-amber-50 border border-amber-200">
-            <div className="text-xs text-amber-700">売上合計 (A.*)</div>
-            <div className="text-sm text-gray-800">予算: ¥{formatJPY(totals.A.budget)} / 実施・予定: ¥{formatJPY(totals.A.actual)} / 確定: ¥{formatJPY(totals.A.confirmed)}</div>
-          </div>
-        )}
-        {activeTop === 'B' && (
-          <div className="p-3 rounded bg-cyan-50 border border-cyan-200">
-            <div className="text-xs text-cyan-700">原価合計 (B.*)</div>
-            <div className="text-sm text-gray-800">予算: ¥{formatJPY(totals.B.budget)} / 実施・予定: ¥{formatJPY(totals.B.actual)} / 確定: ¥{formatJPY(totals.B.confirmed)}</div>
-          </div>
-        )}
+      {/* Unified summary: 売上・仕入・収支 */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <div className="p-3 rounded border bg-amber-50 border-amber-200">
+          <div className="text-xs text-amber-700">売上 (A.*)</div>
+          <div className="text-sm text-gray-800">予算: ¥{formatJPY(summary.rev.budget)} / 実施・予定: ¥{formatJPY(summary.rev.actual)} / 確定: ¥{formatJPY(summary.rev.confirmed)}</div>
+        </div>
+        <div className="p-3 rounded border bg-yellow-50 border-yellow-300">
+          <div className="text-xs text-yellow-800">仕入 (B.* または 仕入合計)</div>
+          <div className="text-sm text-gray-800">予算: ¥{formatJPY(summary.cost.budget)} / 実施・予定: ¥{formatJPY(summary.cost.actual)} / 確定: ¥{formatJPY(summary.cost.confirmed)}</div>
+        </div>
+        <div className="p-3 rounded border bg-slate-50 border-slate-200">
+          <div className="text-xs text-slate-700">収支（売上 - 仕入 または 収支行）</div>
+          <div className="text-sm text-gray-800">予算: ¥{formatJPY(summary.balance.budget)} / 実施・予定: ¥{formatJPY(summary.balance.actual)} / 確定: ¥{formatJPY(summary.balance.confirmed)}</div>
+        </div>
       </div>
+
+  {/* Totals panel for 原価合計 (B.*) removed; unified summary above covers 売上・仕入・収支 */}
 
       {/* Filters & rules */}
       <div className="flex flex-wrap items-center gap-3 mb-3">
@@ -310,7 +407,6 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
               <th className="px-2 py-2 text-left">内容</th>
               <th className="px-2 py-2 text-left">協力会社</th>
               <th className="px-2 py-2 text-right">事業開始時予算 金額</th>
-              <th className="px-2 py-2 text-right">kW単価</th>
               <th className="px-2 py-2 text-right">現時点の実施済み及び予定 金額</th>
               <th className="px-2 py-2 text-left">日付（実施/予定）</th>
               <th className="px-2 py-2 text-right">確定金額</th>
@@ -326,6 +422,7 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
             {viewItems.map(row => {
               const isEditing = editingId === row.id;
               const indent = levelFromCode(row.code) * 12;
+              const isSpecialU = !!(specialTargetCode && row.code === specialTargetCode);
               // Determine true aggregates: only if there are immediate non-'u*' children
               const isImmediateChildOf = (parent: string, child: string) => {
                 return child.startsWith(parent + '.') && child.split('.').length === parent.split('.').length + 1;
@@ -339,6 +436,7 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
               });
               const isAggregate = row.is_aggregate_row || hasNonUImmediateChildren;
               const isAggSumRow = isAggregate;
+              const isCollapsed = isAggregate && collapsed.has(row.code);
               const isCostSummary = isCostSummaryRow(row);
               // Sum descendants for display on real aggregate rows (deepest-populated values only)
               const sumDescendants = (code: string, key: keyof Item) => {
@@ -353,17 +451,30 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
                   .reduce((a, b) => a + (b || 0), 0);
               };
               const isPaid = !!row.is_paid;
-              const disabled = isAggSumRow || isCostSummary || isPaid;
-              const displayBudget = isAggSumRow ? sumDescendants(row.code, 'budget_amount') : row.budget_amount;
-              const displayActual = isAggSumRow ? sumDescendants(row.code, 'actual_planned_amount') : row.actual_planned_amount;
-              const displayConfirmed = isAggSumRow ? sumDescendants(row.code, 'confirmed_amount') : row.confirmed_amount;
+              // Special U row becomes read-only
+              const disabled = isAggSumRow || isCostSummary || isPaid || isSpecialU;
+              let displayBudget: number | null | undefined = isAggSumRow ? sumDescendants(row.code, 'budget_amount') : row.budget_amount;
+              let displayActual: number | null | undefined = isAggSumRow ? sumDescendants(row.code, 'actual_planned_amount') : row.actual_planned_amount;
+              let displayConfirmed: number | null | undefined = isAggSumRow ? sumDescendants(row.code, 'confirmed_amount') : row.confirmed_amount;
+              if (isSpecialU) {
+                displayBudget = summary.balance.budget;
+                displayActual = summary.balance.actual;
+                displayConfirmed = summary.balance.confirmed;
+              }
               const top = row.code.split('.')[0];
               const paidBg = isPaid ? 'bg-blue-50 hover:bg-blue-100' : '';
-              const aggBg = isCostSummary ? 'bg-cyan-50 hover:bg-cyan-100' : (top === 'A' ? 'bg-amber-50 hover:bg-amber-100' : top === 'B' ? 'bg-cyan-50 hover:bg-cyan-100' : 'bg-slate-50 hover:bg-slate-100');
+              const aggBg = isCostSummary ? 'bg-yellow-50 hover:bg-yellow-100' : (top === 'A' ? 'bg-amber-50 hover:bg-amber-100' : top === 'B' ? 'bg-yellow-50 hover:bg-yellow-100' : 'bg-slate-50 hover:bg-slate-100');
               const rowClass = `border-b ${isAggSumRow || isCostSummary ? `${aggBg} font-semibold` : isPaid ? `${paidBg}` : 'hover:bg-indigo-50/40'}`;
               return (
                 <tr key={row.id} id={"row-" + encodeURIComponent(row.code)} className={rowClass}>
-          <td className={"px-2 py-2 text-gray-800 align-top sticky left-0 bg-white w-24 " + ((isAggSumRow || isCostSummary) ? (isCostSummary ? 'border-l-4 border-cyan-500' : (top === 'A' ? 'border-l-4 border-amber-500' : top === 'B' ? 'border-l-4 border-cyan-500' : 'border-l-4 border-slate-400')) : isPaid ? 'border-l-4 border-blue-500' : '')}>
+          <td className={"px-2 py-2 text-gray-800 align-top sticky left-0 bg-white w-24 " + ((isAggSumRow || isCostSummary) ? (isCostSummary ? 'border-l-4 border-yellow-500' : (top === 'A' ? 'border-l-4 border-amber-500' : top === 'B' ? 'border-l-4 border-yellow-500' : 'border-l-4 border-slate-400')) : isPaid ? 'border-l-4 border-blue-500' : '')}>
+                    {isAggregate ? (
+                      <button onClick={() => toggleCollapse(row.code)} className="mr-1 align-middle text-gray-600 hover:text-gray-900">
+                        {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                      </button>
+                    ) : (
+                      <span className="inline-block w-[14px] mr-1" />
+                    )}
                     <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded border">{row.display_code || row.code}</span>
                     {isPaid && !isAggSumRow && !isCostSummary && (
                       <span className="ml-1 text-blue-600" title="支払い済み（編集不可）">🔒</span>
@@ -374,12 +485,15 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
                   </td>
                   <td className="px-2 py-2 align-top">
                     {isEditing ? (
-            <input className="border rounded px-2 py-1 w-full" disabled={disabled}
+                      <input className="border rounded px-2 py-1 w-full" disabled={disabled}
                         value={row.title}
                         onChange={e => onChangeCell(row.id, 'title', e.target.value)}
                         style={{ paddingLeft: indent }} />
                     ) : (
-            <div className={"text-gray-900 truncate max-w-[28ch] " + ((isAggSumRow || isCostSummary) ? (isCostSummary ? 'text-cyan-900' : (top === 'A' ? 'text-amber-900' : top === 'B' ? 'text-cyan-900' : 'text-slate-900')) : '')} style={{ paddingLeft: indent }} title={row.title}>{row.title || <span className="text-gray-400">（未入力）</span>}</div>
+                      <div className={"text-gray-900 truncate max-w-[28ch] " + ((isAggSumRow || isCostSummary) ? (isCostSummary ? 'text-yellow-900' : (top === 'A' ? 'text-amber-900' : top === 'B' ? 'text-yellow-900' : 'text-slate-900')) : '')}
+                        style={{ paddingLeft: indent }} title={isSpecialU ? '収支合計' : row.title}>
+                        {isSpecialU ? '収支合計' : (row.title || <span className="text-gray-400">（未入力）</span>)}
+                      </div>
                     )}
                   </td>
           <td className="px-2 py-2 align-top">
@@ -400,21 +514,7 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
                       <div>¥{formatJPY(displayBudget as number | null)}</div>
                     )}
                   </td>
-                  <td className="px-2 py-2 text-right align-top">
-          {isAggSumRow ? (
-                      <div className="text-gray-700 text-xs leading-5">
-                        <div>予: ¥{kwUnitPrice(displayBudget as number | null)}</div>
-                        <div>実: ¥{kwUnitPrice(displayActual as number | null)}</div>
-                        <div>確: ¥{kwUnitPrice(displayConfirmed as number | null)}</div>
-                      </div>
-                    ) : isCostSummary ? (
-                      <div className="text-gray-700 text-xs leading-5">
-            <div>{costSummaryLabel(row)}kW単価: ¥{kwUnitPrice(row.actual_planned_amount as number | null)}</div>
-                      </div>
-                    ) : (
-                      <div className="text-gray-700"></div>
-                    )}
-                  </td>
+                  {/* kW単価列は削除。代わりに備考列へ簡易表示を移設 */}
                   <td className="px-2 py-2 text-right align-top">
                     {isEditing ? (
                       <input className="border rounded px-2 py-1 w-full text-right" disabled={disabled}
@@ -461,13 +561,49 @@ export const CostEditor: React.FC<Props> = ({ items: itemsProp, onItemsChange })
                     )}
                   </td>
                   
-          <td className="px-2 py-2 align-top">
+                  <td className="px-2 py-2 align-top">
                     {isEditing ? (
-            <input className="border rounded px-2 py-1 w-full" disabled={disabled}
+                      <input className="border rounded px-2 py-1 w-full" disabled={disabled}
                         value={row.note || ''}
                         onChange={e => onChangeCell(row.id, 'note', e.target.value)} />
                     ) : (
-            <div className="text-gray-700 truncate max-w-[24ch]" title={row.note}>{row.note}</div>
+                      (() => {
+                        const uB = kwUnitPrice(displayBudget as number | null);
+                        const uA = kwUnitPrice(displayActual as number | null);
+                        if (isSpecialU) {
+                          const costBud = formatJPY(summary.cost.budget);
+                          const costAct = formatJPY(summary.cost.actual);
+                          const parts: string[] = [];
+                          parts.push(`仕入合計 予: ¥${costBud} / 実: ¥${costAct}`);
+                          if (uB || uA) parts.push(`予: ¥${uB || ''} / 実: ¥${uA || ''}`.replace(/\s+\/\s+$/, ''));
+                          const full = parts.join(' | ');
+                          return <div className="text-gray-700 truncate max-w-[28ch]" title={full}>{full}</div>;
+                        }
+                        let kwInfo = '';
+                        if (isAggSumRow) {
+                          const parts = [] as string[];
+                          if (uB) parts.push(`予: ¥${uB}`);
+                          if (uA) parts.push(`実: ¥${uA}`);
+                          if (parts.length) kwInfo = parts.join(' / ');
+                        } else if (isCostSummary) {
+                          const uBud = kwUnitPrice(row.budget_amount as number | null);
+                          const uAct = kwUnitPrice(row.actual_planned_amount as number | null);
+                          const parts = [] as string[];
+                          if (uBud) parts.push(`予: ¥${uBud}`);
+                          if (uAct) parts.push(`実: ¥${uAct}`);
+                          if (parts.length) kwInfo = parts.join(' / ');
+                        }
+                        const fullText = kwInfo || row.note || '';
+                        return (
+                          <div className="text-gray-700 truncate max-w-[24ch]" title={fullText}>
+                            {kwInfo ? (
+                              <span className="text-xs text-gray-600">{kwInfo}</span>
+                            ) : (
+                              <span>{row.note}</span>
+                            )}
+                          </div>
+                        );
+                      })()
                     )}
                   </td>
                   <td className="px-2 py-2 align-top">

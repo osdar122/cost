@@ -122,11 +122,12 @@ export const CostOverview: React.FC<Props> = ({ items }) => {
   }, [items, sumForPrefix, topBudgetMap, sortKey, sortDir]);
 
   const filteredGroups = React.useMemo(() => secondLevelGroups.filter(g => g.top === activeTop), [secondLevelGroups, activeTop]);
+  // Use a single authoritative aggregation for the active top-level (A/B/...)
   const grand = React.useMemo(() => ({
-    budget: filteredGroups.reduce((a, b) => a + (b.budget || 0), 0),
-    actual: filteredGroups.reduce((a, b) => a + (b.actual || 0), 0),
-    confirmed: filteredGroups.reduce((a, b) => a + (b.confirmed || 0), 0),
-  }), [filteredGroups]);
+    budget: sumForPrefix(activeTop, 'budget_amount'),
+    actual: sumForPrefix(activeTop, 'actual_planned_amount'),
+    confirmed: sumForPrefix(activeTop, 'confirmed_amount'),
+  }), [activeTop, sumForPrefix]);
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
@@ -239,11 +240,14 @@ export const CostOverview: React.FC<Props> = ({ items }) => {
           </tbody>
           <tfoot>
             <tr className="bg-slate-50 border-t">
-              <td className="px-3 py-2 font-semibold" colSpan={2}>合計</td>
+              <td className="px-3 py-2 font-semibold" colSpan={2}>
+                {activeTop === 'B' ? '仕入合計' : activeTop === 'A' ? '売上合計' : '合計'}
+              </td>
               <td className="px-3 py-2 text-right font-semibold">{formatJPY(grand.budget)}</td>
               <td className="px-3 py-2 text-right font-semibold">{formatJPY(grand.actual)}</td>
               <td className="px-3 py-2 text-right font-semibold">{formatJPY(grand.confirmed)}</td>
-              <td className="px-3 py-2 text-right font-semibold">{kwUnit(grand.budget)}</td>
+              {/* Show 実績kW単価 as requested */}
+              <td className="px-3 py-2 text-right font-semibold">{kwUnit(grand.actual)}</td>
               <td className="px-3 py-2" />
             </tr>
           </tfoot>

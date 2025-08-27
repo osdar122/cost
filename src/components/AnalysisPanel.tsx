@@ -1,6 +1,6 @@
 import React from 'react';
 import { Item } from '../types';
-import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { ResponsiveContainer, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ComposedChart, Bar, Area, ReferenceLine } from 'recharts';
 
 type Props = { items: Item[]; onUpdateItem?: (id: number, patch: Partial<Item>) => void };
 
@@ -26,6 +26,15 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
 
   // Precompute deepest-populated sets per amount key to avoid double counting
   const [selectedYM, setSelectedYM] = React.useState<string>(''); // YYYY-MM or ''
+  const [hideMinus100, setHideMinus100] = React.useState<boolean>(true); // 差異-100%を除外
+  const [initialCash, setInitialCash] = React.useState<number>(() => {
+    const raw = localStorage.getItem('analysis.initialCash');
+    const n = raw ? Number(raw) : 0;
+    return Number.isFinite(n) ? n : 0;
+  });
+  React.useEffect(() => {
+    localStorage.setItem('analysis.initialCash', String(initialCash || 0));
+  }, [initialCash]);
   const { deepestBudget, deepestActual, deepestConfirmed } = React.useMemo(() => {
     const hasDeeperWithValue = (base: string, key: keyof Item) =>
       items.some(d => d.code.startsWith(base + '.') && (d[key] as number | null) != null);
@@ -57,23 +66,17 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
 
   // Vendor summary (Top 10)
   const vendorRows = React.useMemo(() => {
-    const map = new Map<string, { vendor: string; budget: number; actual: number; confirmed: number }>();
+    const map = new Map<string, { vendor: string; actual: number; confirmed: number }>();
     const norm = (v?: string) => (v && v.trim()) ? v.trim() : '（未入力）';
-    for (const it of deepestBudget.filter(monthMatch)) {
-      const k = norm(it.vendor);
-      const rec = map.get(k) || { vendor: k, budget: 0, actual: 0, confirmed: 0 };
-      rec.budget += it.budget_amount || 0;
-      map.set(k, rec);
-    }
     for (const it of deepestActual.filter(monthMatch)) {
       const k = norm(it.vendor);
-      const rec = map.get(k) || { vendor: k, budget: 0, actual: 0, confirmed: 0 };
+      const rec = map.get(k) || { vendor: k, actual: 0, confirmed: 0 };
       rec.actual += it.actual_planned_amount || 0;
       map.set(k, rec);
     }
     for (const it of deepestConfirmed.filter(monthMatch)) {
       const k = norm(it.vendor);
-      const rec = map.get(k) || { vendor: k, budget: 0, actual: 0, confirmed: 0 };
+      const rec = map.get(k) || { vendor: k, actual: 0, confirmed: 0 };
       rec.confirmed += it.confirmed_amount || 0;
       map.set(k, rec);
     }
@@ -82,22 +85,44 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
     return arr.slice(0, 10);
   }, [deepestBudget, deepestActual, deepestConfirmed, selectedYM]);
 
-  // Monthly trend (confirmed preferred, fallback to actual when confirmed empty for that row)
-  const monthly = React.useMemo(() => {
-    const buckets = new Map<string, { ym: string; budget: number; actual: number; confirmed: number }>();
-    const bump = (ym: string, key: 'budget' | 'actual' | 'confirmed', val: number) => {
+  // Monthly cash flow (売上/仕入 by payment_date, use actual_planned_amount; confirmed is not used)
+  const monthlyCF = React.useMemo(() => {
+    // Use deepest actual rows to avoid double counting; require payment_date
+    const buckets = new Map<string, { ym: string; sales: number; cost: number; net: number }>();
+    const bump = (ym: string, key: 'sales' | 'cost', val: number) => {
       if (!ym) return;
-      const rec = buckets.get(ym) || { ym, budget: 0, actual: 0, confirmed: 0 };
+      const rec = buckets.get(ym) || { ym, sales: 0, cost: 0, net: 0 };
       (rec as any)[key] += val || 0;
+      rec.net = (rec.sales || 0) - (rec.cost || 0);
       buckets.set(ym, rec);
     };
-    for (const it of deepestBudget) bump(toYM(it.budget_date), 'budget', it.budget_amount || 0);
-    for (const it of deepestActual) bump(toYM(it.actual_planned_date), 'actual', it.actual_planned_amount || 0);
-    for (const it of deepestConfirmed) bump(toYM(it.confirmed_date), 'confirmed', it.confirmed_amount || 0);
+    const pool = deepestActual.filter(it => it.payment_date);
+    for (const it of pool) {
+      const ym = toYM(it.payment_date!);
+      const top = it.code.split('.')[0];
+      const amt = it.actual_planned_amount || 0;
+      if (top === 'A') bump(ym, 'sales', amt);
+      else if (top === 'B') bump(ym, 'cost', amt);
+    }
     const arr = Array.from(buckets.values());
     arr.sort((a, b) => a.ym.localeCompare(b.ym));
     return arr;
-  }, [deepestBudget, deepestActual, deepestConfirmed]);
+  }, [deepestActual]);
+
+  // Add cumulative balance
+  const monthlyCFWithBal = React.useMemo(() => {
+    let bal = initialCash || 0;
+    return monthlyCF.map(m => {
+      bal += m.net || 0;
+      return { ...m, balance: bal };
+    });
+  }, [monthlyCF, initialCash]);
+
+  const endingBalance = React.useMemo(() => {
+    if (!monthlyCFWithBal.length) return initialCash || 0;
+    const last = monthlyCFWithBal[monthlyCFWithBal.length - 1];
+    return last.balance;
+  }, [monthlyCFWithBal, initialCash]);
 
   // Second-level variance (group like A.1, B.2)
   const varianceRows = React.useMemo(() => {
@@ -124,9 +149,11 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
       const top = code.split('.')[0];
       return { code, title, top, budget, confirmed, variance, pct };
     });
-    arr.sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
-    return arr.slice(0, 12);
-  }, [items, isCostSummaryRow, selectedYM]);
+    // Optional filter: hide -100% (confirmed=0, budget>0)
+    const filtered = hideMinus100 ? arr.filter(r => !(r.budget > 0 && (r.confirmed || 0) === 0)) : arr;
+    filtered.sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
+    return filtered.slice(0, 12);
+  }, [items, isCostSummaryRow, selectedYM, hideMinus100]);
 
   // Data quality metrics & paid summary
   const quality = React.useMemo(() => {
@@ -172,7 +199,7 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
     URL.revokeObjectURL(url);
   };
 
-  const exportVendorCSV = () => download('vendor_summary.csv', toCSV(vendorRows, ['vendor','budget','actual','confirmed']));
+  const exportVendorCSV = () => download('vendor_summary.csv', toCSV(vendorRows, ['vendor','actual','confirmed']));
   const exportVarianceCSV = () => download('variance_top12.csv', toCSV(varianceRows, ['code','title','top','budget','confirmed','variance','pct']));
   const exportItemsCSV = () => {
     const cols = ['code','display_code','title','vendor','budget_amount','budget_date','actual_planned_amount','actual_planned_date','confirmed_amount','confirmed_date','payment_date','note'];
@@ -210,17 +237,24 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
           <label className="text-sm text-gray-700">対象年月</label>
           <input type="month" className="border rounded px-2 py-1 text-sm" value={selectedYM} onChange={e => setSelectedYM(e.target.value)} />
         </div>
+        <div className="flex items-center gap-1">
+          <label className="text-sm text-gray-700">初期残高</label>
+          <input type="number" step={1000} className="border rounded px-2 py-1 text-sm w-36 text-right" value={initialCash}
+            onChange={e => {
+              const v = Number(e.target.value);
+              setInitialCash(Number.isFinite(v) ? v : 0);
+            }} />
+        </div>
       </div>
 
       {/* Vendor top 10 */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <div className="border rounded">
-          <div className="px-3 py-2 border-b bg-gray-50 font-medium text-gray-800">業者別 上位10（確定金額順）</div>
+          <div className="px-3 py-2 border-b bg-gray-50 font-medium text-gray-800">業者別 上位10（確定金額順・予算なし）</div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-3 py-2 text-left">業者</th>
-                <th className="px-3 py-2 text-right">予算</th>
                 <th className="px-3 py-2 text-right">実施・予定</th>
                 <th className="px-3 py-2 text-right">確定</th>
               </tr>
@@ -229,7 +263,6 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
               {vendorRows.map(v => (
                 <tr key={v.vendor} className="border-b">
                   <td className="px-3 py-2 truncate max-w-[36ch]" title={v.vendor}>{v.vendor}</td>
-                  <td className="px-3 py-2 text-right">{formatJPY(v.budget)}</td>
                   <td className="px-3 py-2 text-right">{formatJPY(v.actual)}</td>
                   <td className="px-3 py-2 text-right">{formatJPY(v.confirmed)}</td>
                 </tr>
@@ -238,39 +271,47 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
           </table>
         </div>
 
-        {/* Monthly trend */}
+        {/* Monthly cash flow */}
         <div className="border rounded">
-          <div className="px-3 py-2 border-b bg-gray-50 font-medium text-gray-800">月次推移（予算/実施/確定）</div>
+          <div className="px-3 py-2 border-b bg-gray-50 font-medium text-gray-800 flex items-center justify-between">
+            <span>キャッシュフロー（月次・売上/仕入｜A/Bベース｜予算×・確定×）</span>
+            <span className="text-sm">期末残高: <span className={endingBalance < 0 ? 'text-red-600' : 'text-gray-900'}>{formatJPY(endingBalance)}</span></span>
+          </div>
           <div className="p-3 h-60">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={monthly} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <ComposedChart data={monthlyCFWithBal} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke="#eee" strokeDasharray="5 5" />
                 <XAxis dataKey="ym" />
-                <YAxis />
+                <YAxis yAxisId="left" />
+                <YAxis yAxisId="right" orientation="right" />
                 <Tooltip formatter={(v: any) => formatJPY(v)} />
                 <Legend />
-                <Line type="monotone" dataKey="budget" name="予算" stroke="#6366f1" dot={false} />
-                <Line type="monotone" dataKey="actual" name="実施" stroke="#f59e0b" dot={false} />
-                <Line type="monotone" dataKey="confirmed" name="確定" stroke="#10b981" dot={false} />
-              </LineChart>
+                <ReferenceLine y={0} yAxisId="left" stroke="#ddd" />
+                <Bar yAxisId="left" dataKey="sales" name="売上（入金）" fill="#60a5fa" />
+                <Bar yAxisId="left" dataKey="cost" name="仕入（支出）" fill="#fbbf24" />
+                <Line yAxisId="left" type="monotone" dataKey="net" name="純額（当月）" stroke="#6b7280" dot={false} />
+                <Area yAxisId="right" type="monotone" dataKey="balance" name="累積残高" stroke="#10b981" fill="#10b981" fillOpacity={0.15} />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-3 py-2 text-left">年月</th>
-                <th className="px-3 py-2 text-right">予算</th>
-                <th className="px-3 py-2 text-right">実施・予定</th>
-                <th className="px-3 py-2 text-right">確定</th>
+                <th className="px-3 py-2 text-right">売上（入金）</th>
+                <th className="px-3 py-2 text-right">仕入（支出）</th>
+                <th className="px-3 py-2 text-right">純額</th>
+                <th className="px-3 py-2 text-right">期末残高</th>
               </tr>
             </thead>
             <tbody>
-              {monthly.map(m => (
+              {monthlyCFWithBal.map(m => (
                 <tr key={m.ym} className="border-b">
                   <td className="px-3 py-2">{m.ym || '—'}</td>
-                  <td className="px-3 py-2 text-right">{formatJPY(m.budget)}</td>
-                  <td className="px-3 py-2 text-right">{formatJPY(m.actual)}</td>
-                  <td className="px-3 py-2 text-right">{formatJPY(m.confirmed)}</td>
+                  <td className="px-3 py-2 text-right">{formatJPY(m.sales)}</td>
+                  <td className="px-3 py-2 text-right">{formatJPY(m.cost)}</td>
+                  <td className="px-3 py-2 text-right">{formatJPY(m.net)}</td>
+                  <td className={"px-3 py-2 text-right " + ((m as any).balance < 0 ? 'text-red-600' : '')}>{formatJPY((m as any).balance)}</td>
                 </tr>
               ))}
             </tbody>
@@ -281,7 +322,13 @@ export const AnalysisPanel: React.FC<Props> = ({ items, onUpdateItem }) => {
       {/* Variance and quality */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-6">
         <div className="border rounded">
-          <div className="px-3 py-2 border-b bg-gray-50 font-medium text-gray-800">第二階層 差異Top12（確定−予算）</div>
+          <div className="px-3 py-2 border-b bg-gray-50 font-medium text-gray-800 flex items-center justify-between">
+            <span>第二階層 差異Top12（確定−予算）</span>
+            <label className="text-sm text-gray-700 flex items-center gap-1">
+              <input type="checkbox" className="align-middle" checked={hideMinus100} onChange={e => setHideMinus100(e.target.checked)} />
+              -100%（予算&gt;0/確定0）を除外
+            </label>
+          </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>

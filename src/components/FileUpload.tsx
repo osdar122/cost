@@ -174,7 +174,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
       let lastFull: string | null = null;  // e.g., 'B.4.3'
       const uCounters = new Map<string, number>();
       const ensureDotAfterLetter = (s: string) => s.replace(/^([A-Z])(\d)/, '$1.$2');
-      const normalizeCode = (raw: string): { code: string; display: string } => {
+  const normalizeCode = (raw: string): { code: string; display: string } => {
         const orig = raw.trim();
         if (!orig) {
           // No code: attach under lastFull if possible
@@ -190,6 +190,15 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
             return { code: `${lastTop}.u${n}`, display: '' };
           }
           return { code: `U.u1`, display: '' };
+        }
+        // Handle single top-level section letter like 'A' or 'B' as a section switch
+        if (/^[A-Z]$/.test(orig)) {
+          lastTop = orig;
+          lastFull = null;
+          const key = `${lastTop}`;
+          const n = (uCounters.get(key) || 0) + 1;
+          uCounters.set(key, n);
+          return { code: `${lastTop}.u${n}`, display: orig };
         }
         const withDot = ensureDotAfterLetter(orig); // handle 'B4.3' -> 'B.4.3'
         if (/^[A-Z]\.\d+(?:\.\d+)*$/.test(withDot)) {

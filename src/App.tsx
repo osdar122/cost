@@ -13,20 +13,18 @@ function App() {
   const [processingResults, setProcessingResults] = React.useState<any[]>([]);
   const [config, setConfig] = React.useState<any>({});
   const [editorItems, setEditorItems] = React.useState<Item[]>([]);
+  const [activeTab, setActiveTab] = React.useState<'home' | 'upload' | 'editor' | 'summary' | 'analysis' | 'settings' | 'db'>('upload');
 
   const handleFileProcessed = (result: any) => {
     setProcessingResults(prev => [...prev, result]);
     if (result?.data?.items) {
       setEditorItems(result.data.items as Item[]);
+      setActiveTab('editor');
     }
   };
 
   const handleConfigChange = (newConfig: any) => {
     setConfig(newConfig);
-  };
-
-  const handleUpdateItem = (id: number, patch: Partial<Item>) => {
-    setEditorItems(prev => prev.map(i => (i.id === id ? { ...i, ...patch } : i)));
   };
 
   const clearResults = () => {
@@ -60,148 +58,159 @@ function App() {
             </div>
           </div>
         </div>
+        {/* Top-level tabs */}
+        <div className="w-full px-6 xl:px-10 border-t border-gray-200">
+          <nav className="flex gap-2 py-2 overflow-x-auto">
+            {[
+              { key: 'home', label: 'ホーム' },
+              { key: 'upload', label: 'アップロード' },
+              { key: 'editor', label: '編集' },
+              { key: 'summary', label: 'サマリー' },
+              { key: 'analysis', label: '分析' },
+              { key: 'settings', label: '設定' },
+              { key: 'db', label: 'DB状態' },
+            ].map(t => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key as any)}
+                className={(activeTab === (t.key as any) ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-800 hover:bg-gray-200') + ' px-3 py-1.5 rounded-md text-sm'}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        </div>
       </header>
 
       {/* Main Content */}
   <main className="w-full px-6 xl:px-10 py-8">
-        {/* Hero Section */}
-        <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            Excelコストレポート用包括的ETLソリューション
-          </h2>
-          <p className="text-lg text-gray-600 max-w-3xl mx-auto">
-            インテリジェントなヘッダー検出、既存システム連携、包括的データ検証により、
-            Excelコストレポートを正規化されたデータベーススキーマに変換します。
-          </p>
-        </div>
-
-        {/* Feature Grid */}
-  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 mb-12">
-          {/* Excel Processing */}
-          <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
-            <div className="flex items-center mb-4">
-              <FileSpreadsheet className="w-8 h-8 text-green-600 mr-3" />
-              <h3 className="text-lg font-semibold text-gray-900">Excel処理</h3>
+        {activeTab === 'home' && (
+          <>
+            {/* Hero Section */}
+            <div className="text-center mb-12">
+              <h2 className="text-3xl font-bold text-gray-900 mb-4">Excelコストレポート用包括的ETLソリューション</h2>
+              <p className="text-lg text-gray-600 max-w-3xl mx-auto">
+                インテリジェントなヘッダー検出、既存システム連携、包括的データ検証により、Excelコストレポートを正規化されたデータベーススキーマに変換します。
+              </p>
             </div>
-            <ul className="text-sm text-gray-600 space-y-2">
-              <li>• インテリジェント2段ヘッダー検出</li>
-              <li>• 柔軟な列マッピング</li>
-              <li>• プロジェクトメタデータ抽出</li>
-              <li>• 勘定科目コード検証</li>
-              <li>• 小計行フィルタリング</li>
-            </ul>
+
+            {/* Feature Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 mb-12">
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div className="flex items-center mb-4">
+                  <FileSpreadsheet className="w-8 h-8 text-green-600 mr-3" />
+                  <h3 className="text-lg font-semibold text-gray-900">Excel処理</h3>
+                </div>
+                <ul className="text-sm text-gray-600 space-y-2">
+                  <li>• インテリジェント2段ヘッダー検出</li>
+                  <li>• 柔軟な列マッピング</li>
+                  <li>• プロジェクトメタデータ抽出</li>
+                  <li>• 勘定科目コード検証</li>
+                  <li>• 小計行フィルタリング</li>
+                </ul>
+              </div>
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div className="flex items-center mb-4">
+                  <Database className="w-8 h-8 text-blue-600 mr-3" />
+                  <h3 className="text-lg font-semibold text-gray-900">データベース統合</h3>
+                </div>
+                <ul className="text-sm text-gray-600 space-y-2">
+                  <li>• 正規化されたPostgreSQLスキーマ</li>
+                  <li>• ディメンションテーブルとファクトテーブル</li>
+                  <li>• 既存システム連携</li>
+                  <li>• あいまい取引先マッチング</li>
+                  <li>• 冪等処理</li>
+                </ul>
+              </div>
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div className="flex items-center mb-4">
+                  <CheckCircle className="w-8 h-8 text-purple-600 mr-3" />
+                  <h3 className="text-lg font-semibold text-gray-900">データ品質</h3>
+                </div>
+                <ul className="text-sm text-gray-600 space-y-2">
+                  <li>• ビジネスルール検証</li>
+                  <li>• 型正規化</li>
+                  <li>• 受入テスト</li>
+                  <li>• 包括的ログ出力</li>
+                  <li>• エラーレポート</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* システムアーキテクチャ */}
+            <div className="bg-white rounded-lg shadow-md p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">システムアーキテクチャ</h3>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="text-center p-4 bg-gray-50 rounded-lg">
+                  <FileSpreadsheet className="w-8 h-8 text-green-600 mx-auto mb-2" />
+                  <div className="font-medium text-gray-900">抽出</div>
+                  <div className="text-xs text-gray-600">Excel処理</div>
+                </div>
+                <div className="text-center p-4 bg-gray-50 rounded-lg">
+                  <Settings className="w-8 h-8 text-blue-600 mx-auto mb-2" />
+                  <div className="font-medium text-gray-900">変換</div>
+                  <div className="text-xs text-gray-600">正規化</div>
+                </div>
+                <div className="text-center p-4 bg-gray-50 rounded-lg">
+                  <Database className="w-8 h-8 text-purple-600 mx-auto mb-2" />
+                  <div className="font-medium text-gray-900">格納</div>
+                  <div className="text-xs text-gray-600">データベース保存</div>
+                </div>
+                <div className="text-center p-4 bg-gray-50 rounded-lg">
+                  <CheckCircle className="w-8 h-8 text-indigo-600 mx-auto mb-2" />
+                  <div className="font-medium text-gray-900">検証</div>
+                  <div className="text-xs text-gray-600">品質保証</div>
+                </div>
+              </div>
+              <div className="mt-6 border-t pt-4 flex items-center justify-between flex-col sm:flex-row gap-3">
+                <div className="text-sm text-gray-600">編集型コストレポートAPIがローカルで起動している場合、以下からアクセスできます。</div>
+                <div className="flex items-center gap-3">
+                  <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700">Swaggerドキュメントを開く</a>
+                  <a href="http://127.0.0.1:8000/openapi.json" target="_blank" rel="noreferrer" className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-gray-100 text-gray-800 hover:bg-gray-200">OpenAPI JSON</a>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeTab === 'upload' && (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              <FileUpload onFileProcessed={handleFileProcessed} />
+              <ProcessingResults results={processingResults} onClear={clearResults} />
+            </div>
+          </>
+        )}
+
+        {activeTab === 'editor' && (
+          <div>
+            <CostEditor items={editorItems} onItemsChange={setEditorItems} />
           </div>
+        )}
 
-          {/* Database Integration */}
-          <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
-            <div className="flex items-center mb-4">
-              <Database className="w-8 h-8 text-blue-600 mr-3" />
-              <h3 className="text-lg font-semibold text-gray-900">データベース統合</h3>
-            </div>
-            <ul className="text-sm text-gray-600 space-y-2">
-              <li>• 正規化されたPostgreSQLスキーマ</li>
-              <li>• ディメンションテーブルとファクトテーブル</li>
-              <li>• 既存システム連携</li>
-              <li>• あいまい取引先マッチング</li>
-              <li>• 冪等処理</li>
-            </ul>
+        {activeTab === 'summary' && (
+          <div>
+            <CostOverview items={editorItems} />
           </div>
+        )}
 
-          {/* Data Quality */}
-          <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
-            <div className="flex items-center mb-4">
-              <CheckCircle className="w-8 h-8 text-purple-600 mr-3" />
-              <h3 className="text-lg font-semibold text-gray-900">データ品質</h3>
-            </div>
-            <ul className="text-sm text-gray-600 space-y-2">
-              <li>• ビジネスルール検証</li>
-              <li>• 型正規化</li>
-              <li>• 受入テスト</li>
-              <li>• 包括的ログ出力</li>
-              <li>• エラーレポート</li>
-            </ul>
+        {activeTab === 'analysis' && (
+          <div>
+            <AnalysisPanel items={editorItems} />
           </div>
-        </div>
+        )}
 
-        {/* 機能セクション */}
-  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-          {/* ファイルアップロード */}
-          <FileUpload onFileProcessed={handleFileProcessed} />
-          
-          {/* データベース状態 */}
-          <DatabaseStatus config={config} />
-        </div>
-
-        {/* 処理結果 */}
-        <ProcessingResults results={processingResults} onClear={clearResults} />
-
-        {/* 設定パネル */}
-        <div className="mb-8">
-          <ConfigPanel onConfigChange={handleConfigChange} />
-        </div>
-
-        {/* システムアーキテクチャ */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">システムアーキテクチャ</h3>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <FileSpreadsheet className="w-8 h-8 text-green-600 mx-auto mb-2" />
-              <div className="font-medium text-gray-900">抽出</div>
-              <div className="text-xs text-gray-600">Excel処理</div>
-            </div>
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <Settings className="w-8 h-8 text-blue-600 mx-auto mb-2" />
-              <div className="font-medium text-gray-900">変換</div>
-              <div className="text-xs text-gray-600">正規化</div>
-            </div>
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <Database className="w-8 h-8 text-purple-600 mx-auto mb-2" />
-              <div className="font-medium text-gray-900">格納</div>
-              <div className="text-xs text-gray-600">データベース保存</div>
-            </div>
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <CheckCircle className="w-8 h-8 text-indigo-600 mx-auto mb-2" />
-              <div className="font-medium text-gray-900">検証</div>
-              <div className="text-xs text-gray-600">品質保証</div>
-            </div>
+        {activeTab === 'settings' && (
+          <div className="mb-8">
+            <ConfigPanel onConfigChange={handleConfigChange} />
           </div>
-          <div className="mt-6 border-t pt-4 flex items-center justify-between flex-col sm:flex-row gap-3">
-            <div className="text-sm text-gray-600">編集型コストレポートAPIがローカルで起動している場合、以下からアクセスできます。</div>
-            <div className="flex items-center gap-3">
-              <a
-                href="http://127.0.0.1:8000/docs"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700"
-              >
-                Swaggerドキュメントを開く
-              </a>
-              <a
-                href="http://127.0.0.1:8000/openapi.json"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-gray-100 text-gray-800 hover:bg-gray-200"
-              >
-                OpenAPI JSON
-              </a>
-            </div>
+        )}
+
+        {activeTab === 'db' && (
+          <div className="grid grid-cols-1 gap-8 mb-8">
+            <DatabaseStatus config={config} />
           </div>
-        </div>
-
-        {/* 編集UI（モック） */}
-        <div className="mt-8">
-          <CostEditor items={editorItems} onItemsChange={setEditorItems} />
-        </div>
-
-        {/* 費用一覧（サマリー） */}
-        <div className="mt-8">
-          <CostOverview items={editorItems} />
-        </div>
-
-        {/* 分析・サポート */}
-        <div className="mt-8">
-          <AnalysisPanel items={editorItems} onUpdateItem={handleUpdateItem} />
-        </div>
+        )}
       </main>
 
       {/* Footer */}
