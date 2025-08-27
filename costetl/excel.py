@@ -10,9 +10,14 @@ from dateutil import parser as date_parser
 
 from .logging_utils import StructuredLogger
 from .normalize import normalize_column_name, to_date, to_number
+from .schema import ExcelSchema
 
 
-def detect_headers(df: pd.DataFrame, logger: StructuredLogger) -> Tuple[int, List[str]]:
+def detect_headers(
+    df: pd.DataFrame,
+    logger: StructuredLogger,
+    schema: Optional[ExcelSchema] = None,
+) -> Tuple[int, List[str]]:
     """
     Detect header rows in Excel data and return data start row and column names.
     
@@ -23,7 +28,15 @@ def detect_headers(df: pd.DataFrame, logger: StructuredLogger) -> Tuple[int, Lis
     Returns:
         Tuple of (data_start_row, normalized_column_names)
     """
+    # Default keywords; allow schema to extend/override
     key_words = ["項目CD", "内容", "協力会社", "予算", "現時点", "確定", "請求", "金額", "日付", "支払"]
+    if schema and schema.header_keywords:
+        # Merge unique keywords, keeping order (schema first for priority)
+        merged = []
+        for kw in schema.header_keywords + [k for k in key_words if k not in schema.header_keywords]:
+            if kw not in merged:
+                merged.append(kw)
+        key_words = merged
     
     # Find row with at least 2 keywords
     header_row_idx = None
@@ -48,7 +61,7 @@ def detect_headers(df: pd.DataFrame, logger: StructuredLogger) -> Tuple[int, Lis
     for i, (top, sub) in enumerate(zip(top_header, sub_header)):
         top_str = str(top).strip() if pd.notna(top) else ""
         sub_str = str(sub).strip() if pd.notna(sub) and str(sub) != "nan" else ""
-        
+
         if top_str and sub_str:
             combined = f"{top_str}__{sub_str}"
         elif top_str:
@@ -57,7 +70,7 @@ def detect_headers(df: pd.DataFrame, logger: StructuredLogger) -> Tuple[int, Lis
             combined = sub_str
         else:
             combined = f"col_{i}"
-        
+
         column_names.append(normalize_column_name(combined))
     
     data_start_row = header_row_idx + 2  # Skip both header rows
@@ -155,11 +168,12 @@ def is_detail_row(row: pd.Series, account_code_regex: str, subtotal_keywords: Li
 
 
 def process_excel_file(
-    file_path: str, 
+    file_path: str,
     sheet_name: str,
     account_code_regex: str,
     subtotal_keywords: List[str],
-    logger: StructuredLogger
+    logger: StructuredLogger,
+    schema: Optional[ExcelSchema] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Process Excel file and extract structured data.
@@ -182,7 +196,7 @@ def process_excel_file(
         logger.debug(f"Raw data shape: {df_raw.shape}")
         
         # Detect headers and get column names
-        data_start_row, column_names = detect_headers(df_raw, logger)
+        data_start_row, column_names = detect_headers(df_raw, logger, schema)
         
         # Extract project metadata
         project_meta = extract_project_meta(df_raw, data_start_row, logger)
@@ -191,6 +205,12 @@ def process_excel_file(
         df_data = df_raw.iloc[data_start_row:].copy()
         df_data.columns = column_names
         df_data.reset_index(drop=True, inplace=True)
+
+        # Optional: apply column aliases from schema to match downstream expectations
+        if schema and schema.column_aliases:
+            rename_map = {src: dst for src, dst in schema.column_aliases.items() if src in df_data.columns}
+            if rename_map:
+                df_data.rename(columns=rename_map, inplace=True)
         
         # Add source tracking information
         df_data['source_file'] = file_path
@@ -205,8 +225,17 @@ def process_excel_file(
         )
         
         # Filter detail rows
+        # Allow schema to override or extend rules
+        effective_account_code_regex = schema.account_code_regex if schema and schema.account_code_regex else account_code_regex
+        effective_subtotal_keywords = subtotal_keywords.copy()
+        if schema and schema.subtotal_keywords:
+            # Merge unique keywords
+            for kw in schema.subtotal_keywords:
+                if kw not in effective_subtotal_keywords:
+                    effective_subtotal_keywords.append(kw)
+
         detail_mask = df_data.apply(
-            lambda row: is_detail_row(row, account_code_regex, subtotal_keywords),
+            lambda row: is_detail_row(row, effective_account_code_regex, effective_subtotal_keywords),
             axis=1
         )
         

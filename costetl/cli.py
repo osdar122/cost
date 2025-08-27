@@ -14,6 +14,7 @@ from .load import DatabaseLoader
 from .logging_utils import get_logger
 from .transform import extract_dimensions, transform_to_facts, validate_transformed_data
 from .validate import DataValidator
+from .schema import ExcelSchema
 
 
 @click.group()
@@ -25,8 +26,9 @@ def main() -> None:
 @main.command()
 @click.option('--config', default='config.yaml', help='Configuration file path')
 @click.option('--input', 'input_path', help='Input Excel file or directory')
+@click.option('--schema', 'schema_path', help='Optional JSON schema to guide parsing')
 @click.option('--dry-run', is_flag=True, help='Run without making database changes')
-def ingest(config: str, input_path: Optional[str], dry_run: bool) -> None:
+def ingest(config: str, input_path: Optional[str], schema_path: Optional[str], dry_run: bool) -> None:
     """Ingest Excel cost reports into database."""
     
     # Load configuration
@@ -41,7 +43,7 @@ def ingest(config: str, input_path: Optional[str], dry_run: bool) -> None:
     logger = get_logger(config_obj.app.log_dir)
     
     try:
-        # Determine input files
+    # Determine input files
         input_files = []
         if input_path:
             if Path(input_path).is_file():
@@ -72,6 +74,14 @@ def ingest(config: str, input_path: Optional[str], dry_run: bool) -> None:
             db_loader = None
             integrator = None
         
+        # Load optional schema
+        schema_obj = None
+        if schema_path and Path(schema_path).exists():
+            try:
+                schema_obj = ExcelSchema.from_file(schema_path)
+            except Exception as e:
+                logger.warning(f"Failed to load schema JSON: {e}")
+
         # Process each file
         total_summary = {
             "files_processed": 0,
@@ -92,7 +102,8 @@ def ingest(config: str, input_path: Optional[str], dry_run: bool) -> None:
                     config_obj.app.default_sheet,
                     config_obj.rules.account_code_regex,
                     config_obj.rules.subtotal_keywords,
-                    logger
+                    logger,
+                    schema=schema_obj,
                 )
                 
                 if len(df_details) == 0:

@@ -1,0 +1,137 @@
+openapi: 3.0.3
+info:
+  title: Cost Edit-mode API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8000
+paths:
+  /projects/{projectId}:
+    get:
+      summary: Get project
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not Found }
+    patch:
+      summary: Update project header/settings
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200': { description: OK }
+        '404': { description: Not Found }
+  /projects/{projectId}/milestones:
+    get:
+      summary: List milestones
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Milestone' }
+    post:
+      summary: Add milestone
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Milestone' }
+      responses:
+        '200': { description: OK }
+  /projects/{projectId}/cost-report/recalculate:
+    post:
+      summary: Recalculate aggregates for latest report
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: OK }
+  /projects/{projectId}/cost-items/{itemId}:
+    patch:
+      summary: Update cost item (optimistic lock)
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: integer }
+        - in: path
+          name: itemId
+          required: true
+          schema: { type: integer }
+        - in: header
+          name: If-Match
+          required: false
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CostItemPatch' }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not Found }
+        '409': { description: Conflict }
+        '422': { description: Validation error }
+
+components:
+  schemas:
+    ProjectUpdate:
+      type: object
+      properties:
+        pj_code: { type: string }
+        pj_identifier: { type: string }
+        name: { type: string }
+        address: { type: string }
+        fit: { type: string }
+        kubun: { type: string }
+        capacity_dc_kw: { type: number }
+        capacity_ac_kw: { type: number }
+        module_model: { type: string }
+        pcs_model: { type: string }
+    Milestone:
+      type: object
+      properties:
+        id: { type: integer }
+        label: { type: string }
+        due_date: { type: string, format: date }
+        memo: { type: string }
+      required: [label]
+    CostItemPatch:
+      type: object
+      properties:
+        title: { type: string }
+        vendor_id: { type: integer }
+        actual_planned_amount: { type: integer }
+        actual_planned_date: { type: string, format: date }
+        confirmed_amount: { type: integer }
+        confirmed_date: { type: string, format: date }
+        payment_date: { type: string, format: date }
+        delivery_date: { type: string, format: date }
+        po_number: { type: string }
+        note: { type: string }

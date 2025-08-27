@@ -1,0 +1,274 @@
+Metadata-Version: 2.4
+Name: costetl
+Version: 0.1.0
+Summary: Excel Cost Report ETL System
+Author: Data Engineering Team
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: openpyxl>=3.1.0
+Requires-Dist: SQLAlchemy>=2.0.0
+Requires-Dist: psycopg2-binary>=2.9.0
+Requires-Dist: python-dateutil>=2.8.0
+Requires-Dist: rapidfuzz>=3.0.0
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: click>=8.0.0
+Requires-Dist: great-expectations>=0.17.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: loguru>=0.7.0
+Requires-Dist: fastapi>=0.110.0
+Requires-Dist: uvicorn>=0.23.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+Requires-Dist: types-PyYAML; extra == "dev"
+Requires-Dist: types-python-dateutil; extra == "dev"
+
+# Excel Cost Report ETL System
+
+A comprehensive ETL (Extract, Transform, Load) system for processing Excel cost reports into a normalized database schema with integration capabilities to existing systems.
+
+## Features
+
+- **Flexible Header Detection**: Automatically detects and handles varying Excel header structures
+- **Data Normalization**: Converts wide-format cost data into normalized fact tables
+- **Integration Support**: Connects with existing project and vendor databases
+- **Fuzzy Matching**: Intelligent vendor name matching with configurable thresholds
+- **Idempotent Processing**: Safe to re-run without creating duplicates
+- **Comprehensive Logging**: Structured JSON logs with detailed processing metrics
+- **Data Validation**: Built-in validation against expected business totals
+
+## Requirements
+
+- Python 3.10+
+- PostgreSQL database
+- Required Python packages (see `pyproject.toml`)
+
+## Installation
+
+1. Clone or extract the project files
+2. Install dependencies:
+```bash
+pip install -e .
+```
+
+3. Install development dependencies (optional):
+```bash
+pip install -e ".[dev]"
+```
+
+## Configuration
+
+Create a `config.yaml` file based on `config.yaml.sample`:
+
+```yaml
+app:
+  input_dir: "./data/inbox"
+  archive_dir: "./data/archive" 
+  reject_dir: "./data/rejects"
+  log_dir: "./logs"
+  default_sheet: "Sheet1"
+
+db:
+  url: "postgresql+psycopg2://user:pass@localhost:5432/appdb"
+  existing_db_url: null  # Optional separate DB for existing data
+  schema_name: "cost"
+
+integration:
+  existing_projects_table: "existing.projects"
+  existing_vendors_table: "existing.vendors"
+  enable_fuzzy_vendor_match: true
+  fuzzy_threshold: 90
+
+rules:
+  account_code_regex: "^[A-Z]\\.[0-9]+(\\.[0-9]+)*$"
+  subtotal_keywords: ["合計", "小計", "累計", "売上合計", "kW単価"]
+  vendor_normalize_patterns:
+    - ["（株）", ""]
+    - ["(株)", ""]
+    - ["株式会社", ""]
+```
+
+## Database Setup
+
+The system requires a PostgreSQL database. Set your connection details in the configuration file or environment variables:
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://user:pass@localhost:5432/appdb"
+```
+
+## Usage
+
+### Basic Commands
+
+1. **Process Excel files**:
+```bash
+costetl ingest --config config.yaml
+```
+
+2. **Process specific file**:
+```bash
+costetl ingest --input ./path/to/file.xlsx
+```
+
+3. **Dry run (no database changes)**:
+```bash
+costetl ingest --input ./file.xlsx --dry-run
+```
+
+4. **Generate unmatched vendors report**:
+```bash
+costetl reconcile vendors
+```
+
+5. **Validate file structure**:
+```bash
+costetl validate --input ./コストレポート例.xlsx
+```
+
+### Expected File Format
+
+The system expects Excel files with:
+
+- **Metadata section** at the top with key-value pairs (PJCD, 案件名, etc.)
+- **Two-row headers** with main categories and sub-categories
+- **Detail rows** with account codes matching the pattern `^[A-Z]\.[0-9]+(\.[0-9]+)*$`
+- **Amount columns** for budget, actual/planned, and confirmed amounts
+
+### Directory Structure
+
+```
+project/
+├── data/
+│   ├── inbox/     # Input Excel files
+│   ├── archive/   # Processed files
+│   └── rejects/   # Invalid rows CSV
+├── logs/          # Processing logs and reports
+└── config.yaml    # Configuration file
+```
+
+## Database Schema
+
+The system creates the following tables:
+
+- **`cost.stg_cost_rows`**: Staging table with raw Excel data
+- **`cost.dim_project`**: Project dimension table
+- **`cost.dim_account`**: Account hierarchy dimension
+- **`cost.dim_vendor`**: Vendor dimension with normalization
+- **`cost.fct_cost`**: Narrow fact table with measures
+- **`cost.vw_cost_with_existing`**: View joining with existing systems
+
+## Testing
+
+Run the test suite:
+
+```bash
+pytest tests/ -v
+```
+
+Run with coverage:
+
+```bash
+pytest tests/ --cov=costetl --cov-report=html
+```
+
+### Acceptance Test
+
+The system includes acceptance tests using sample data with expected totals:
+
+- Budget total: ¥836,078,000
+- Actual/Plan total: ¥778,222,542  
+- Confirmed total: ¥147,640,758
+
+## Logging and Monitoring
+
+The system generates:
+
+- **Structured logs**: `logs/run_YYYYMMDD_HHMM.jsonl`
+- **Processing summaries**: `logs/summary_YYYYMMDD_HHMM.json`
+- **Unmatched vendor reports**: `logs/unmatched_vendors_YYYYMMDD_HHMM.csv`
+
+Key metrics tracked:
+- Files processed/failed
+- Records loaded/skipped/errors
+- Integration match rates
+- Processing performance
+
+## Error Handling
+
+- **Hard failures**: Database connection issues, file corruption, schema errors
+- **Soft failures**: Data conversion errors (logged as warnings)
+- **Data quality**: Invalid formats converted to NULL with warnings
+- **Audit trail**: All records traceable to source file and row
+
+## Integration with Existing Systems
+
+The system can integrate with existing databases:
+
+1. **Project matching**: Exact match on PJCD codes
+2. **Vendor matching**: 
+   - Exact match on normalized names
+   - Fuzzy matching with configurable threshold
+   - Manual review reports for unmatched items
+
+## Performance
+
+Designed to handle:
+- Thousands of rows per file
+- Dozens of files per batch
+- Processing time: several minutes for typical workloads
+
+## Development
+
+### Code Quality
+
+The project follows strict quality standards:
+- Type hints required
+- Comprehensive test coverage
+- Linting with ruff and black
+- Maximum function complexity limits
+
+### Adding New Features
+
+1. Update configuration schema in `config.py`
+2. Add transformation logic in appropriate modules
+3. Include comprehensive tests
+4. Update documentation
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Header detection fails**:
+   - Check that Excel file has expected keywords
+   - Verify sheet name configuration
+   - Review log files for detection details
+
+2. **Database connection errors**:
+   - Verify database URL and credentials
+   - Ensure PostgreSQL server is running
+   - Check network connectivity
+
+3. **Validation failures**:
+   - Review expected vs actual totals in logs
+   - Check for data quality issues
+   - Verify account code regex patterns
+
+4. **Performance issues**:
+   - Monitor log files for processing times
+   - Check database query performance
+   - Consider indexing strategies
+
+### Getting Help
+
+- Review detailed logs in the `logs/` directory
+- Check configuration against sample file
+- Verify database schema creation
+- Run validation commands to isolate issues
+
+## License
+
+This project is proprietary software for internal use.

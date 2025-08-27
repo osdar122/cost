@@ -25,8 +25,8 @@ def normalize_column_name(name: str) -> str:
     # Convert to string and strip
     name = str(name).strip()
     
-    # Replace newlines with spaces for multiline headers
-    name = re.sub(r'\n+', ' ', name)
+    # Replace actual newlines with literal \n for multiline headers (tests expect this)
+    name = re.sub(r'\n+', r'\\n', name)
     name = re.sub(r'\s+', ' ', name)
     
     return name

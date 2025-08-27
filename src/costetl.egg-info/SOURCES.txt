@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+src/costetl.egg-info/PKG-INFO
+src/costetl.egg-info/SOURCES.txt
+src/costetl.egg-info/dependency_links.txt
+src/costetl.egg-info/entry_points.txt
+src/costetl.egg-info/requires.txt
+src/costetl.egg-info/top_level.txt
+tests/test_acceptance_sample.py
+tests/test_header_detection.py
+tests/test_idempotency.py
+tests/test_transform.py

@@ -318,7 +318,8 @@ class DatabaseLoader:
         }
         
         try:
-            with self.SessionLocal() as session:
+            session = self.SessionLocal()
+            try:
                 # Upsert dimensions first
                 project_id = self.upsert_project(session, project_data, integrator)
                 
@@ -394,7 +395,11 @@ class DatabaseLoader:
                         summary["errors"] += 1
                 
                 session.commit()
-                
+            finally:
+                try:
+                    session.close()
+                except Exception:
+                    pass
         except Exception as e:
             self.logger.error(f"Error in load_facts: {e}")
             raise
